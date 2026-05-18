@@ -11,6 +11,9 @@ import warnings
 from typing import Dict, List, Tuple, Any, Optional
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
+import argparse
+import sys
+# from datetime import datetime
 warnings.filterwarnings('ignore')
 
 # =============================================================================
@@ -18,7 +21,9 @@ warnings.filterwarnings('ignore')
 # =============================================================================
 TRAIN_PATH = '../ggwt_data/train_dataset.csv'
 VALID_PATH = '../ggwt_data/valid_features.csv'
+TEST_PATH = '../ggwt_data/test_dataset.csv'
 OUTPUT_VALID = 'solverdata.csv'
+OUTPUT_TEST = 'test_predictions18may.csv' 
 
 TARGET = 'Выработка. Результирующий расчет'
 DT_COL = 'METEOFORECASTHOUR_OPENM_Datetime'
@@ -28,12 +33,21 @@ N_TURBINES  = 26
 LATITUDE    = 46.8268455973
 LONGITUDE   = 38.7179393185
 
+# =============================================================================
+# УПРАВЛЕНИЕ ЭТАПАМИ ПАЙПЛАЙНА
+# =============================================================================
+RUN_OPTIMIZATION = {
+    'optimize_hyperparams': False,     # Оптимизация гиперпараметров моделей (долго!)
+    'optimize_weights': True,          # Подбор весов ансамбля на holdout
+    'feature_selection': False,        # Рекурсивное исключение признаков (долго!)
+}
+
 # КОНФИГУРАЦИЯ МОДЕЛЕЙ
 # =============================================================================
 # Модель считается активной, если список сидов не пустой
 MODEL_CONFIGS = {
     'LightGBM': {
-        'seeds': [42],#[42, 123, 777, 2024, 9001],
+        'seeds': [42, 123, 777, 2024, 9001],
         'weight': None,  # None = будет подобран автоматически
         'params': {
             'objective': 'quantile',
@@ -43,7 +57,7 @@ MODEL_CONFIGS = {
         },
     },
     'CatBoost': {
-        'seeds': [],#[42, 123, 777, 2024, 9001],
+        'seeds': [],#[42, 123, 777],
         'weight': None,
         'params': {
             'iterations': 1000,
@@ -57,7 +71,7 @@ MODEL_CONFIGS = {
         },
     },
     'XGBoost': {
-        'seeds': [],#[42, 123, 777, 2024, 9001],
+        'seeds': [42, 123, 777],
         'weight': None,
         'params': {
             'n_estimators': 1000,
@@ -76,6 +90,392 @@ MODEL_CONFIGS = {
 
 LGB_ITER_MULTIPLIER = 1.1
 N_WAKE_SECTORS = 72
+
+FEATURE_SELECTION_CONFIG = {
+    'max_features_to_drop': 200,      # Максимум признаков для удаления
+    'improvement_threshold': 0.001,  # Минимальное улучшение MAE для удаления (МВт)
+    'exclude_patterns': [],#['lag', 'era5', 'power', 'wake', 'theory'],  # Паттерны признаков, которые НЕ трогать
+    'force_keep': [],#['u84', 'v84', 'wind_speed_84m'],  # Признаки, которые нельзя удалять
+    
+    # Начальный список признаков (None = использовать все)
+    'base_features': None,  # Или например: ['wind_speed_84m', 'u84', 'v84', 'ws84_cubed']
+#     'base_features': [
+#     'month',
+#     'hour_of_day',
+#     'wind_speed_10m',
+#     'wind_speed_80m',
+#     'wind_speed_180m',
+#     'wind_direction_10m',
+#     'wind_direction_80m',
+#     'wind_gusts_10m',
+#     'temperature_80m',
+#     'temperature_120m',
+#     'pressure_msl',
+#     'rain',
+#     'showers',
+#     'snowfall',
+#     'cloud_cover_low',
+#     'wind_speed_84m',
+#     'wind_direction_84m',
+#     'temperature_84m',
+#     'dayofweek',
+#     'hour_sin',
+#     'hour_cos',
+#     'month_cos',
+#     'doy_cos',
+#     'wind_direction_10m_sin',
+#     'wind_direction_10m_cos',
+#     'wind_direction_80m_sin',
+#     'wind_direction_80m_cos',
+#     'wind_direction_120m_sin',
+#     'wind_direction_120m_cos',
+#     'wind_direction_180m_sin',
+#     'wind_speed_80m_sq',
+#     'wind_speed_80m_cube',
+#     'wind_speed_120m_cube',
+#     'wind_shear',
+#     'gust_ratio',
+#     'ws84_cubed',
+#     'u84',
+#     'air_density',
+#     'wind_power_density',
+#     'shear_120_84',
+#     'shear_84_10',
+#     'theory_power_total',
+#     'ws84_lag1',
+#     'ws84_lag2',
+#     'ws84_lag3',
+#     'wd84_lag1_sin',
+#     'wd84_lag1_cos',
+#     'wd84_lag2_sin',
+#     'wd84_lag2_cos',
+#     'wd84_lag3_sin',
+#     'wd84_lag3_cos',
+#     'elevation_median',
+#     'elevation_range',
+#     'elevation_std',
+#     'relative_elevation',
+#     'slope_steepness',
+#     'slope_aspect_sin',
+#     'slope_aspect_cos',
+#     'terrain_type',
+#     'wind_slope_proj',
+#     'wind_up_slope',
+#     'wind_speed_x_slope',
+#     'repair_ma6',
+#     'has_repair',
+#     'available_ratio',
+#     'ws10_era5',
+#     'ws100_era5',
+#     'wd10_era5',
+#     'wd100_era5',
+#     'temp2m_era5',
+#     'pressure_era5',
+#     'rh2m_era5',
+#     'dewpoint2m_era5',
+#     'wind_speed_84m_era5',
+#     'wind_direction_84m_era5',
+#     'temperature_84m_era5',
+#     'pressure_msl_era5',
+#     'ws84_cubed_era5',
+#     'v84_era5',
+#     'air_density_era5',
+#     'wind_power_density_era5',
+#     'theory_power_total_era5',
+#     'ws84_lag2_era5',
+#     'ws84_lag3_era5',
+#     'wd84_lag1_sin_era5',
+#     'wd84_lag1_cos_era5',
+#     'wd84_lag2_sin_era5',
+#     'wd84_lag2_cos_era5',
+#     'wd84_lag3_sin_era5',
+#     'wd84_lag3_cos_era5',
+#     'shear_120_84_era5',
+#     'shear_84_10_era5',
+#     'ws50_power',
+#     'ws2_power',
+#     'rh2m_power',
+#     'temp2m_power',
+#     'pressure_power',
+#     'qv2m_power',
+#     'precip_power',
+#     'ws84_power',
+#     'air_density_power',
+#     'ws84_cubed_power',
+#     'theory_power_total_power',
+#     'ws84_lag1_power',
+#     'ws84_lag2_power',
+#     'ws84_lag3_power',
+#     'pm2_5',
+#     'pm10',
+#     'co',
+#     'aod',
+#     'wake_factor',
+#     'wake_corrected_power',
+# ],
+
+#     #second pass
+#     'base_features': [
+#     'hour_of_day',
+#     'wind_speed_10m',
+#     'wind_speed_80m',
+#     'wind_speed_180m',
+#     'wind_direction_10m',
+#     'wind_direction_80m',
+#     'temperature_80m',
+#     'temperature_120m',
+#     'pressure_msl',
+#     'rain',
+#     'showers',
+#     'snowfall',
+#     'cloud_cover_low',
+#     'wind_speed_84m',
+#     'wind_direction_84m',
+#     'temperature_84m',
+#     'dayofweek',
+#     'hour_sin',
+#     'hour_cos',
+#     'doy_cos',
+#     'wind_direction_10m_sin',
+#     'wind_direction_10m_cos',
+#     'wind_direction_80m_sin',
+#     'wind_direction_80m_cos',
+#     'wind_direction_120m_sin',
+#     'wind_direction_120m_cos',
+#     'wind_direction_180m_sin',
+#     'wind_speed_80m_sq',
+#     'wind_speed_80m_cube',
+#     'wind_speed_120m_cube',
+#     'wind_shear',
+#     'ws84_cubed',
+#     'u84',
+#     'air_density',
+#     'wind_power_density',
+#     'shear_120_84',
+#     'shear_84_10',
+#     'theory_power_total',
+#     'ws84_lag1',
+#     'ws84_lag2',
+#     'ws84_lag3',
+#     'wd84_lag1_sin',
+#     'wd84_lag1_cos',
+#     'wd84_lag2_sin',
+#     'wd84_lag2_cos',
+#     'wd84_lag3_cos',
+#     'elevation_median',
+#     'elevation_range',
+#     'elevation_std',
+#     'relative_elevation',
+#     'slope_steepness',
+#     'slope_aspect_sin',
+#     'slope_aspect_cos',
+#     'terrain_type',
+#     'wind_slope_proj',
+#     'wind_up_slope',
+#     'wind_speed_x_slope',
+#     'repair_ma6',
+#     'has_repair',
+#     'available_ratio',
+#     'ws10_era5',
+#     'wd10_era5',
+#     'wd100_era5',
+#     'temp2m_era5',
+#     'pressure_era5',
+#     'rh2m_era5',
+#     'dewpoint2m_era5',
+#     'wind_speed_84m_era5',
+#     'wind_direction_84m_era5',
+#     'temperature_84m_era5',
+#     'pressure_msl_era5',
+#     'ws84_cubed_era5',
+#     'v84_era5',
+#     'air_density_era5',
+#     'wind_power_density_era5',
+#     'theory_power_total_era5',
+#     'ws84_lag2_era5',
+#     'ws84_lag3_era5',
+#     'wd84_lag1_sin_era5',
+#     'wd84_lag1_cos_era5',
+#     'wd84_lag2_sin_era5',
+#     'wd84_lag2_cos_era5',
+#     'wd84_lag3_sin_era5',
+#     'wd84_lag3_cos_era5',
+#     'shear_120_84_era5',
+#     'shear_84_10_era5',
+#     'ws50_power',
+#     'ws2_power',
+#     'rh2m_power',
+#     'temp2m_power',
+#     'pressure_power',
+#     'qv2m_power',
+#     'precip_power',
+#     'ws84_power',
+#     'air_density_power',
+#     'ws84_cubed_power',
+#     'theory_power_total_power',
+#     'ws84_lag1_power',
+#     'ws84_lag2_power',
+#     'ws84_lag3_power',
+#     'pm2_5',
+#     'pm10',
+#     'co',
+#     'aod',
+#     'wake_factor',
+#     'wake_corrected_power',
+# ],
+
+#     # xg+lg
+#     'base_features': [
+#     'month',
+#     'hour_of_day',
+#     'wind_speed_10m',
+#     'wind_speed_80m',
+#     'wind_speed_180m',
+#     'wind_direction_10m',
+#     'wind_direction_80m',
+#     'wind_direction_180m',
+#     'wind_gusts_10m',
+#     'temperature_80m',
+#     'temperature_120m',
+#     'pressure_msl',
+#     'rain',
+#     'showers',
+#     'snowfall',
+#     'cloud_cover_low',
+#     'wind_speed_84m',
+#     'wind_direction_84m',
+#     'temperature_84m',
+#     'dayofyear',
+#     'dayofweek',
+#     'week',
+#     'hour_sin',
+#     'hour_cos',
+#     'month_sin',
+#     'month_cos',
+#     'doy_sin',
+#     'doy_cos',
+#     'wind_direction_10m_sin',
+#     'wind_direction_10m_cos',
+#     'wind_direction_80m_sin',
+#     'wind_direction_80m_cos',
+#     'wind_direction_120m_sin',
+#     'wind_direction_120m_cos',
+#     'wind_direction_180m_sin',
+#     'wind_direction_180m_cos',
+#     'wind_speed_80m_sq',
+#     'wind_speed_80m_cube',
+#     'wind_speed_120m_cube',
+#     'wind_shear',
+#     'gust_ratio',
+#     'wind_avg',
+#     'ws84_cubed',
+#     'u84',
+#     'v84',
+#     'air_density',
+#     'shear_120_84',
+#     'shear_84_10',
+#     'theory_power_total',
+#     'ws84_lag1',
+#     'ws84_lag2',
+#     'ws84_lag3',
+#     'wd84_lag1_sin',
+#     'wd84_lag1_cos',
+#     'wd84_lag2_sin',
+#     'wd84_lag2_cos',
+#     'wd84_lag3_sin',
+#     'wd84_lag3_cos',
+#     'elevation_median',
+#     'elevation_range',
+#     'elevation_std',
+#     'relative_elevation',
+#     'slope_steepness',
+#     'slope_aspect_sin',
+#     'slope_aspect_cos',
+#     'terrain_type',
+#     'wind_slope_proj',
+#     'wind_slope_cross',
+#     'wind_up_slope',
+#     'wind_speed_x_slope',
+#     'repair_ma6',
+#     'has_repair',
+#     'repair_interp',
+#     'turbines_available',
+#     'available_ratio',
+#     'days_since_update',
+#     'repair_confidence',
+#     'ws10_era5',
+#     'ws100_era5',
+#     'wd10_era5',
+#     'wd100_era5',
+#     'temp2m_era5',
+#     'pressure_era5',
+#     'rh2m_era5',
+#     'dewpoint2m_era5',
+#     'wind_speed_84m_era5',
+#     'wind_direction_84m_era5',
+#     'temperature_84m_era5',
+#     'pressure_msl_era5',
+#     'ws84_cubed_era5',
+#     'u84_era5',
+#     'v84_era5',
+#     'air_density_era5',
+#     'wind_power_density_era5',
+#     'theory_power_total_era5',
+#     'ws84_lag1_era5',
+#     'ws84_lag2_era5',
+#     'ws84_lag3_era5',
+#     'wd84_lag1_sin_era5',
+#     'wd84_lag1_cos_era5',
+#     'wd84_lag2_sin_era5',
+#     'wd84_lag2_cos_era5',
+#     'wd84_lag3_sin_era5',
+#     'wd84_lag3_cos_era5',
+#     'shear_120_84_era5',
+#     'shear_84_10_era5',
+#     'ws10_power',
+#     'ws50_power',
+#     'ws2_power',
+#     'rh2m_power',
+#     'temp2m_power',
+#     'pressure_power',
+#     'qv2m_power',
+#     'precip_power',
+#     'ws84_power',
+#     'air_density_power',
+#     'ws84_cubed_power',
+#     'theory_power_total_power',
+#     'ws84_lag1_power',
+#     'ws84_lag2_power',
+#     'ws84_lag3_power',
+#     'pm2_5',
+#     'pm10',
+#     'co',
+#     'aod',
+#     'wake_factor',
+#     'wake_corrected_power',
+# ]
+}
+
+# =============================================================================
+# ПАРСИНГ АРГУМЕНТОВ КОМАНДНОЙ СТРОКИ
+# =============================================================================
+def parse_arguments():
+    """Парсит аргументы командной строки"""
+    parser = argparse.ArgumentParser(description='ML модель для прогнозирования выработки ВЭС')
+    
+    parser.add_argument('--train_path', type=str, default='../ggwt_data/train_dataset.csv',
+                        help='Путь к файлу с обучающими данными')
+    
+    parser.add_argument('--valid_path', type=str, default='../ggwt_data/valid_features.csv',
+                        help='Путь к файлу с валидационными/тестовыми данными')
+    
+    parser.add_argument('--output_path', type=str, default='solverdata.csv',
+                        help='Путь для сохранения результата')
+    
+    parser.add_argument('--filter_date', type=str, default=None,
+                        help='Фильтр по дате (например: "2026-05-18") - оставить только указанную дату')
+    
+    return parser.parse_args()
 
 # =============================================================================
 # АБСТРАКТНЫЙ БЕЙС-КЛАСС ДЛЯ МОДЕЛЕЙ
@@ -375,14 +775,63 @@ def optimize_xgboost(X: np.ndarray, y: np.ndarray) -> Dict:
     return best_params
 
 # =============================================================================
+# 12.5. ФУНКЦИИ ДЛЯ РЕКУРСИВНОГО ИСКЛЮЧЕНИЯ ПРИЗНАКОВ
+# =============================================================================
+
+def print_features_list(features, name="OPTIMAL_FEATURES"):
+    """Выводит список признаков в формате, готовом для копирования"""
+    print(f"\n{'='*60}")
+    print(f"{name} = [")
+    for f in features:
+        print(f"    '{f}',")
+    print("]")
+    print(f"{'='*60}\n")
+
+
+def get_feature_importance_from_wrapper(model_wrapper, feature_names, top_n=None):
+    """
+    Получает важность признаков из обученной модели LightGBM
+    """
+    if not model_wrapper.models:
+        return feature_names[:top_n] if top_n else feature_names
+    
+    # Берем первую модель из ансамбля
+    first_model = model_wrapper.models[0]
+    
+    if hasattr(first_model, 'feature_importances_'):
+        importance = first_model.feature_importances_
+        feat_imp = list(zip(feature_names, importance))
+        feat_imp.sort(key=lambda x: x[1], reverse=True)
+        if top_n:
+            return [f for f, imp in feat_imp[:top_n]]
+        return [f for f, imp in feat_imp]
+    return feature_names
+
+
+def calculate_mae_with_weights(model_wrappers, weights, X_ho, y_ho):
+    """
+    Вычисляет MAE на holdout с заданными весами
+    """
+    final_pred = np.zeros(len(y_ho))
+    total_weight = sum(weights.values())
+    
+    for name, wrapper in model_wrappers.items():
+        if wrapper.is_active and weights.get(name, 0) > 0:
+            pred = wrapper.predict_holdout(X_ho)
+            final_pred += (weights[name] / total_weight) * pred
+    
+    return mean_absolute_error(y_ho, final_pred)
+
+# =============================================================================
 # 13. HOLDOUT-ВАЛИДАЦИЯ + ПОДБОР ВЕСОВ
 # =============================================================================
 def train_and_optimize_weights(X_tr: np.ndarray, y_tr: np.ndarray, 
                                X_ho: np.ndarray, y_ho: np.ndarray,
-                               model_wrappers: Dict[str, BaseModelWrapper]) -> Tuple[Dict[str, float], Dict[str, BaseModelWrapper]]:
+                               model_wrappers: Dict[str, BaseModelWrapper]) -> Tuple[Dict[str, float], Dict[str, BaseModelWrapper], float]:
     """
     Обучает модели на тренировочных данных с валидацией на holdout,
     подбирает оптимальные веса для активных моделей.
+    Возвращает: (веса, обертки, финальный MAE)
     """
     active_models = {name: wrapper for name, wrapper in model_wrappers.items() if wrapper.is_active}
     
@@ -398,40 +847,48 @@ def train_and_optimize_weights(X_tr: np.ndarray, y_tr: np.ndarray,
         wrapper.train_ensemble(X_tr, y_tr, X_ho, y_ho)
         holdout_predictions[name] = wrapper.predict_holdout(X_ho)
     
-    # Подбор весов для активных моделей
-    model_names = list(active_models.keys())
-    n_models = len(model_names)
-    best_weights = {name: 0.0 for name in model_names}
-    best_mae = np.inf
-    
-    # Генерируем все возможные комбинации весов с шагом 0.05
-    def generate_weights(current_weights: List[float], remaining_idx: int, remaining_sum: float):
-        nonlocal best_weights, best_mae
+    # Подбор весов (только если включено)
+    if RUN_OPTIMIZATION['optimize_weights']:
+        model_names = list(active_models.keys())
+        n_models = len(model_names)
+        best_weights = {name: 0.0 for name in model_names}
+        best_mae = np.inf
         
-        if remaining_idx == n_models - 1:
-            final_weights = current_weights + [remaining_sum]
-            if all(w >= 0 for w in final_weights):
-                pred = np.zeros(len(y_ho))
-                for idx, name in enumerate(model_names):
-                    pred += final_weights[idx] * holdout_predictions[name]
-                
-                mae = mean_absolute_error(y_ho, pred)
-                if mae < best_mae:
-                    best_mae = mae
-                    best_weights = {name: final_weights[idx] for idx, name in enumerate(model_names)}
-        else:
-            for i in range(21):  # 0.0, 0.05, ..., 1.0
-                w = i / 20.0
-                if w <= remaining_sum:
-                    generate_weights(current_weights + [w], remaining_idx + 1, remaining_sum - w)
+        # Генерируем все возможные комбинации весов с шагом 0.05
+        def generate_weights(current_weights: List[float], remaining_idx: int, remaining_sum: float):
+            nonlocal best_weights, best_mae
+            
+            if remaining_idx == n_models - 1:
+                final_weights = current_weights + [remaining_sum]
+                if all(w >= 0 for w in final_weights):
+                    pred = np.zeros(len(y_ho))
+                    for idx, name in enumerate(model_names):
+                        pred += final_weights[idx] * holdout_predictions[name]
+                    
+                    mae = mean_absolute_error(y_ho, pred)
+                    if mae < best_mae:
+                        best_mae = mae
+                        best_weights = {name: final_weights[idx] for idx, name in enumerate(model_names)}
+            else:
+                for i in range(21):  # 0.0, 0.05, ..., 1.0
+                    w = i / 20.0
+                    if w <= remaining_sum:
+                        generate_weights(current_weights + [w], remaining_idx + 1, remaining_sum - w)
+        
+        generate_weights([], 0, 1.0)
+        
+        print(f"\nОптимальные веса (MAE={best_mae:.3f} МВт):")
+        for name, weight in best_weights.items():
+            print(f"  {name}: {weight:.2f}")
+    else:
+        # Равные веса, если оптимизация отключена
+        n_models = len(active_models)
+        best_weights = {name: 1.0/n_models for name in active_models.keys()}
+        best_mae = calculate_mae_with_weights(model_wrappers, best_weights, X_ho, y_ho)
+        print(f"\nИспользуем равные веса: {best_weights}")
+        print(f"MAE при равных весах: {best_mae:.3f} МВт")
     
-    generate_weights([], 0, 1.0)
-    
-    print(f"\nОптимальные веса (MAE={best_mae:.3f} МВт):")
-    for name, weight in best_weights.items():
-        print(f"  {name}: {weight:.2f}")
-    
-    return best_weights, model_wrappers
+    return best_weights, model_wrappers, best_mae
 
 # =============================================================================
 # 14. ФИНАЛЬНОЕ ОБУЧЕНИЕ ТОЛЬКО ДЛЯ МОДЕЛЕЙ С НЕНУЛЕВЫМ ВЕСОМ
@@ -483,16 +940,40 @@ def final_train_and_predict(X: np.ndarray, y: np.ndarray,
 # ОСНОВНОЙ ПАЙПЛАЙН
 # =============================================================================
 def main():
-    # [Здесь должен быть весь код загрузки и обработки данных]
-    # Для краткости предполагаем, что переменные X, y, X_valid, valid_f уже созданы
-    # (в реальном коде сюда вставляются все разделы 1-11)
+    args = parse_arguments()
+
+    print("="*60)
+    print("ЗАПУСК ML ПАЙПЛАЙНА")
+    print("="*60)
+    print(f"Тренировочные данные: {args.train_path}")
+    print(f"Валидационные данные: {args.valid_path}")
+    print(f"Выходной файл: {args.output_path}")
+    if args.filter_date:
+        print(f"Фильтр по дате: {args.filter_date} (оставляем только эту дату)")
+    print("="*60 + "\n")
+    
     # =============================================================================
     # 1. ЗАГРУЗКА ИСХОДНЫХ ДАННЫХ
     # =============================================================================
-    train = pd.read_csv(TRAIN_PATH)
-    valid = pd.read_csv(VALID_PATH)
+    train = pd.read_csv(args.train_path)
+    valid = pd.read_csv(args.valid_path)
     train[DT_COL] = pd.to_datetime(train[DT_COL])
     valid[DT_COL] = pd.to_datetime(valid[DT_COL])
+    valid = valid.drop(TARGET, axis=1, errors='ignore') # если в данных есть столец выработки
+
+    # print(valid[valid[DT_COL].dt.date == pd.to_datetime('2026-05-18').date()])
+
+    # ПРИМЕНЯЕМ ФИЛЬТР ПО ДАТЕ (если указан)
+    if args.filter_date:
+        # filter_date = pd.to_datetime(args.filter_date)
+        # print(args.filter_date, filter_date)
+        # Оставляем только строки за указанную дату
+        valid = valid[valid[DT_COL].dt.date == pd.to_datetime(args.filter_date).date()]
+        # valid = valid[valid[DT_COL].dt.date == pd.to_datetime('2026-05-18').date()]
+        # date_mask = (valid[DT_COL].dt.date == filter_date.date())
+        # valid = valid[date_mask].copy()
+        print(f"✅ Применен фильтр: оставлено {len(valid)} строк за {args.filter_date}")
+
     valid_order = valid[DT_COL].copy()
     train = train.sort_values(DT_COL).reset_index(drop=True)
 
@@ -509,8 +990,8 @@ def main():
                 "wind_direction_10m", "wind_direction_100m",
                 "temperature_2m", "pressure_msl",
                 #
-                # "relative_humidity_2m",   
-                # "dew_point_2m", # точка росы
+                "relative_humidity_2m",   
+                "dew_point_2m", # точка росы
             ],
             "timezone": "UTC"
         }
@@ -524,8 +1005,8 @@ def main():
             "temp2m_era5": r["temperature_2m"],
             "pressure_era5": r["pressure_msl"],
             #
-            # "rh2m_era5": r["relative_humidity_2m"],
-            # "dewpoint2m_era5": r["dew_point_2m"],
+            "rh2m_era5": r["relative_humidity_2m"],
+            "dewpoint2m_era5": r["dew_point_2m"],
         })
 
     print("Загрузка ERA5...")
@@ -874,19 +1355,19 @@ def main():
 
         df['repair_ma6']  = df['Кол-во_ВЭУ_в_ремонте'].rolling(6, min_periods=1).mean()
         df['has_repair']  = (df['Кол-во_ВЭУ_в_ремонте'] > 0).astype(int)
-        # df['repair_interp'] = df['Кол-во_ВЭУ_в_ремонте'].where(
-        #     df['Кол-во_ВЭУ_в_ремонте'] != df['Кол-во_ВЭУ_в_ремонте'].shift(1)
-        # ).interpolate(method='linear')
+        df['repair_interp'] = df['Кол-во_ВЭУ_в_ремонте'].where(
+            df['Кол-во_ВЭУ_в_ремонте'] != df['Кол-во_ВЭУ_в_ремонте'].shift(1)
+        ).interpolate(method='linear')
         repaired_num = df['Кол-во_ВЭУ_в_ремонте']
         df['turbines_available'] = N_TURBINES - repaired_num
         df['available_ratio']    = (N_TURBINES - repaired_num) / N_TURBINES        
 
-        # # Определяем момент изменения значения ремонта
-        # mask = df['Кол-во_ВЭУ_в_ремонте'] != df['Кол-во_ВЭУ_в_ремонте'].shift(1)
-        # group_ids = mask.cumsum()
-        # # df['days_since_update'] = df.groupby(group_ids).cumcount() / 24
-        # hours_since = df.groupby(group_ids).cumcount()
-        # df['repair_confidence'] = 1 - (hours_since / (24 * 30)).clip(lower=0.3)
+        # Определяем момент изменения значения ремонта
+        mask = df['Кол-во_ВЭУ_в_ремонте'] != df['Кол-во_ВЭУ_в_ремонте'].shift(1)
+        group_ids = mask.cumsum()
+        df['days_since_update'] = df.groupby(group_ids).cumcount() / 24
+        hours_since = df.groupby(group_ids).cumcount()
+        df['repair_confidence'] = 1 - (hours_since / (24 * 30)).clip(lower=0.3)
         return df
 
     def fill_missing_180m(df):
@@ -973,11 +1454,6 @@ def main():
     
 
 
-
-
-
-    
-    
     
     # # Оптимизация LightGBM (только если модель активна)
     # if MODEL_CONFIGS['LightGBM']['seeds']:
@@ -998,18 +1474,18 @@ def main():
     best_cat_params = None
     best_xgb_params = None
 
-    # Лучшие найденные параметры (вставьте сюда после оптимизации):
-    # best_lgb_params = {'n_estimators': 1453, 'learning_rate': 0.013840925580516236, 'num_leaves': 86, 'max_depth': 6, 'min_child_samples': 43, 'subsample': 0.768182043222019, 'colsample_bytree': 0.736109480670197, 'reg_alpha': 0.0010719709736106663, 'reg_lambda': 0.9126523093098456, 'objective': 'quantile', 'alpha': 0.5, 'n_jobs': -1, 'verbose': -1}
-    # best_cat_params = {'iterations': 1362, 'learning_rate': 0.013597596978785926, 'depth': 7, 'l2_leaf_reg': 0.02114815090518835, 'border_count': 101, 'bootstrap_type': 'Bernoulli', 'subsample': 0.9035862570363855, 'verbose': False}
-    best_xgb_params = {'n_estimators': 1071, 'learning_rate': 0.026569216347370212, 'max_depth': 5, 'min_child_weight': 10, 'subsample': 0.8097813488756438, 'colsample_bytree': 0.6463475564516007, 'colsample_bylevel': 0.8496268024138052, 'reg_alpha': 0.0251343211987505, 'reg_lambda': 0.03247801858119664, 'gamma': 0.009378112717555705, 'objective': 'reg:quantileerror', 'quantile_alpha': 0.5, 'verbosity': 0}
-
-    best_lgb_params = {'n_estimators': 1309, 'learning_rate': 0.011548797797512488, 'num_leaves': 42, 'max_depth': 11, 'min_child_samples': 37, 'subsample': 0.6805130457867344, 'colsample_bytree': 0.7114480131980546, 'reg_alpha': 0.008808333526206925, 'reg_lambda': 0.010302057297292477, 'objective': 'quantile', 'alpha': 0.5, 'n_jobs': -1, 'verbose': -1}
-
     # РАСКОММЕНТИРОВАТЬ ДЛЯ ОПТИМИЗАЦИИ:
-    # best_lgb_params = optimize_lightgbm(X, y)
-    # best_cat_params = optimize_catboost(X, y)
-    # best_xgb_params = optimize_xgboost(X, y)
+    if RUN_OPTIMIZATION['optimize_hyperparams']:
+        best_lgb_params = optimize_lightgbm(X, y)
+        best_cat_params = optimize_catboost(X, y)
+        best_xgb_params = optimize_xgboost(X, y)
+    else:
+        # Лучшие найденные параметры (вставьте сюда после оптимизации):
+        # best_lgb_params = {'n_estimators': 1453, 'learning_rate': 0.013840925580516236, 'num_leaves': 86, 'max_depth': 6, 'min_child_samples': 43, 'subsample': 0.768182043222019, 'colsample_bytree': 0.736109480670197, 'reg_alpha': 0.0010719709736106663, 'reg_lambda': 0.9126523093098456, 'objective': 'quantile', 'alpha': 0.5, 'n_jobs': -1, 'verbose': -1}
+        # best_cat_params = {'iterations': 1362, 'learning_rate': 0.013597596978785926, 'depth': 7, 'l2_leaf_reg': 0.02114815090518835, 'border_count': 101, 'bootstrap_type': 'Bernoulli', 'subsample': 0.9035862570363855, 'verbose': False}
+        best_xgb_params = {'n_estimators': 1071, 'learning_rate': 0.026569216347370212, 'max_depth': 5, 'min_child_weight': 10, 'subsample': 0.8097813488756438, 'colsample_bytree': 0.6463475564516007, 'colsample_bylevel': 0.8496268024138052, 'reg_alpha': 0.0251343211987505, 'reg_lambda': 0.03247801858119664, 'gamma': 0.009378112717555705, 'objective': 'reg:quantileerror', 'quantile_alpha': 0.5, 'verbosity': 0}
 
+        best_lgb_params = {'n_estimators': 1309, 'learning_rate': 0.011548797797512488, 'num_leaves': 42, 'max_depth': 11, 'min_child_samples': 37, 'subsample': 0.6805130457867344, 'colsample_bytree': 0.7114480131980546, 'reg_alpha': 0.008808333526206925, 'reg_lambda': 0.010302057297292477, 'objective': 'quantile', 'alpha': 0.5, 'n_jobs': -1, 'verbose': -1}
 
     # Применяем найденные параметры к конфигам
     if best_lgb_params is not None:
@@ -1028,13 +1504,164 @@ def main():
     # Создаем обертки для моделей
     model_wrappers = create_model_wrappers()
     
+
+
+
+    # =========================================================================
+    # ОПЦИОНАЛЬНЫЙ ОТБОР ПРИЗНАКОВ
+    # =========================================================================
+    if RUN_OPTIMIZATION['feature_selection']:
+        print("\n" + "="*60)
+        print("ЗАПУСК FEATURE SELECTION")
+        print("="*60)
+        
+        # Определяем начальный список признаков
+        if FEATURE_SELECTION_CONFIG['base_features'] is not None:
+            current_features = FEATURE_SELECTION_CONFIG['base_features'].copy()
+            print(f"Используем пользовательский список из {len(current_features)} признаков")
+        else:
+            current_features = FEATURES.copy()
+            print(f"Используем все {len(current_features)} признаков")
+        
+        # Защищенные признаки (не удаляем)
+        protected = set(FEATURE_SELECTION_CONFIG['force_keep'])
+        exclude_patterns = FEATURE_SELECTION_CONFIG['exclude_patterns']
+        
+        # Добавляем защиту по паттернам
+        for name in current_features:
+            for pattern in exclude_patterns:
+                if pattern in name:
+                    protected.add(name)
+        
+        print(f"Защищенные признаки ({len(protected)}): {list(protected)[:10]}...")
+        
+        # Создаем holdout для оценки
+        holdout_mask = (train_f[DT_COL] >= '2025-01-01') & (train_f[DT_COL] < '2025-04-01')
+        X_tr_full = train_f[current_features].values
+        X_ho_full = valid_f[current_features].values
+        X_tr_sel, X_ho_sel = X_tr_full[~holdout_mask], X_tr_full[holdout_mask]
+        y_tr_sel, y_ho_sel = y[~holdout_mask], y[holdout_mask]
+        
+        fs_model_wrappers = create_model_wrappers()
+
+        # Базовая оценка
+        print("\nОценка baseline...")
+        best_weights, _, baseline_mae = train_and_optimize_weights(
+            X_tr_sel, y_tr_sel, X_ho_sel, y_ho_sel, model_wrappers
+        )
+        current_mae = baseline_mae
+        
+        print(f"Baseline MAE ({len(current_features)} признаков): {current_mae:.4f} МВт")
+        
+        removed_features = []
+        log_entries = []
+        
+        for iteration in range(FEATURE_SELECTION_CONFIG['max_features_to_drop']):
+            # Получаем важность признаков из LightGBM (если активен)
+            if 'LightGBM' in model_wrappers and model_wrappers['LightGBM'].is_active:
+                importance_list = get_feature_importance_from_wrapper(
+                    model_wrappers['LightGBM'], current_features, None
+                )
+            else:
+                # Если LightGBM выключен, пробуем CatBoost или XGBoost
+                for name in ['CatBoost', 'XGBoost']:
+                    if name in model_wrappers and model_wrappers[name].is_active:
+                        importance_list = get_feature_importance_from_wrapper(
+                            model_wrappers[name], current_features, None
+                        )
+                        break
+                else:
+                    # Если нет активных моделей для определения важности
+                    print("⚠️ Нет активных моделей для определения важности признаков")
+                    break
+            
+            # Ищем кандидата на удаление
+            candidate = None
+            for feat in reversed(importance_list):  # с конца (наименее важные)
+                if feat not in protected and feat not in removed_features:
+                    candidate = feat
+                    break
+            
+            if candidate is None:
+                print(f"\n⚠️ Нет доступных признаков для удаления")
+                break
+            
+            # Пробуем удалить кандидата
+            test_features = [f for f in current_features if f != candidate]
+            
+            # Создаем данные без кандидата
+            X_tr_test = train_f[test_features].values
+            X_ho_test = valid_f[test_features].values
+            X_tr_test_sel, X_ho_test_sel = X_tr_test[~holdout_mask], X_tr_test[holdout_mask]
+            
+            # Переобучаем модели
+            print(f"\nТестируем удаление '{candidate}'...")
+            test_weights, _, test_mae = train_and_optimize_weights(
+                X_tr_test_sel, y_tr_sel, X_ho_test_sel, y_ho_sel, model_wrappers
+            )
+            
+            improvement = current_mae - test_mae
+            
+            if improvement > FEATURE_SELECTION_CONFIG['improvement_threshold']:
+                # Принимаем удаление
+                current_features = test_features
+                current_mae = test_mae
+                removed_features.append(candidate)
+                
+                # Обновляем данные для следующих итераций
+                X_tr_full = train_f[current_features].values
+                X_ho_full = valid_f[current_features].values
+                X_tr_sel, X_ho_sel = X_tr_full[~holdout_mask], X_tr_full[holdout_mask]
+                
+                print(f"\n✅ Итерация {iteration+1}: удален '{candidate}'")
+                print(f"   MAE: {current_mae:.4f} МВт (улучшение на {improvement:.4f})")
+                print(f"   Осталось признаков: {len(current_features)}")
+                
+                log_entries.append({
+                    'iteration': iteration+1,
+                    'removed': candidate,
+                    'mae': current_mae,
+                    'improvement': improvement,
+                    'features_count': len(current_features)
+                })
+            else:
+                print(f"\n❌ Итерация {iteration+1}: пропущен '{candidate}'")
+                print(f"   MAE: {test_mae:.4f} МВт (ухудшение на {-improvement:.4f})")
+                # Добавляем в защищенные, чтобы не пытаться снова
+                protected.add(candidate)
+        
+        # Обновляем FEATURES для финального обучения
+        FEATURES = current_features
+        X = train_f[FEATURES].values
+        X_valid = valid_f[FEATURES].values
+        
+        print(f"\n{'='*60}")
+        print(f"FEATURE SELECTION ЗАВЕРШЕН")
+        print(f"Итоговый MAE: {current_mae:.4f} МВт")
+        print(f"Удалено признаков: {len(removed_features)}")
+        print(f"Осталось признаков: {len(FEATURES)}")
+        print(f"{'='*60}")
+        
+        # Выводим копируемый список
+        print_features_list(FEATURES, "OPTIMAL_FEATURES")
+    else:
+        print("\n⏭️ Feature selection пропущен (используем базовые признаки из конфига feature_selection)")
+        if FEATURE_SELECTION_CONFIG['base_features'] is not None:
+            FEATURES = FEATURE_SELECTION_CONFIG['base_features']
+        X = train_f[FEATURES].values
+        X_valid = valid_f[FEATURES].values
+        print(f"✅ Используем оптимальный список из {len(FEATURES)} признаков")
+
+
+    model_wrappers = create_model_wrappers()
+
     # Создаем holdout для подбора весов
     holdout_mask = (train_f[DT_COL] >= '2025-01-01') & (train_f[DT_COL] < '2025-04-01')
     X_tr, X_ho = X[~holdout_mask], X[holdout_mask]
     y_tr, y_ho = y[~holdout_mask], y[holdout_mask]
     
     # Обучаем модели на train с валидацией и подбираем веса
-    best_weights, model_wrappers = train_and_optimize_weights(X_tr, y_tr, X_ho, y_ho, model_wrappers)
+    best_weights, model_wrappers, _ = train_and_optimize_weights(X_tr, y_tr, X_ho, y_ho, model_wrappers)
     
     # Финальное обучение только моделей с весом > 0
     final_pred = final_train_and_predict(X, y, X_valid, model_wrappers, best_weights, optimize_lgbm_iters=False)
@@ -1044,12 +1671,12 @@ def main():
     final_pred[zero_mask] = 0.0
     final_pred = np.minimum(final_pred, CAPACITY * valid_f['available_ratio'].values + 1e-3)
     final_pred = np.clip(final_pred, 0, CAPACITY)
-    
+
     # Сохранение результатов
     result = (pd.DataFrame({DT_COL: valid_f[DT_COL].values, TARGET: final_pred})
                 .set_index(DT_COL).loc[valid_order].reset_index())
-    result[[TARGET]].to_csv(OUTPUT_VALID, index=False)
-    print(f"\n[OK] {OUTPUT_VALID} сохранён ({len(result)} строк)")
+    result[[TARGET]].to_csv(args.output_path, index=False)
+    print(f"\n[OK] {args.output_path} сохранён ({len(result)} строк)")
 
 if __name__ == "__main__":
     main()

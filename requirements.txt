@@ -1,0 +1,8 @@
+pandas==3.0.3
+numpy==2.4.4
+requests==2.34.1
+lightgbm==4.6.0
+catboost==1.2.10
+xgboost==3.2.0
+scikit-learn==1.8.0
+optuna==4.8.0
