@@ -33,7 +33,7 @@ LONGITUDE   = 38.7179393185
 # Модель считается активной, если список сидов не пустой
 MODEL_CONFIGS = {
     'LightGBM': {
-        'seeds': [42, 123, 777, 2024, 9001],
+        'seeds': [42],#[42, 123, 777, 2024, 9001],
         'weight': None,  # None = будет подобран автоматически
         'params': {
             'objective': 'quantile',
@@ -43,7 +43,7 @@ MODEL_CONFIGS = {
         },
     },
     'CatBoost': {
-        'seeds': [42, 123, 777, 2024, 9001],
+        'seeds': [],#[42, 123, 777, 2024, 9001],
         'weight': None,
         'params': {
             'iterations': 1000,
@@ -57,7 +57,7 @@ MODEL_CONFIGS = {
         },
     },
     'XGBoost': {
-        'seeds': [42, 123, 777, 2024, 9001],
+        'seeds': [],#[42, 123, 777, 2024, 9001],
         'weight': None,
         'params': {
             'n_estimators': 1000,
@@ -439,7 +439,8 @@ def train_and_optimize_weights(X_tr: np.ndarray, y_tr: np.ndarray,
 def final_train_and_predict(X: np.ndarray, y: np.ndarray, 
                            X_valid: np.ndarray,
                            model_wrappers: Dict[str, BaseModelWrapper],
-                           weights: Dict[str, float]) -> np.ndarray:
+                           weights: Dict[str, float],
+                           optimize_lgbm_iters=False) -> np.ndarray:
     """
     Финальное обучение только тех моделей, у которых вес > 0
     """
@@ -452,11 +453,11 @@ def final_train_and_predict(X: np.ndarray, y: np.ndarray,
     print(f"\nМодели для финального обучения (вес > 0): {list(active_models.keys())}")
     
     # Специальная обработка для LightGBM: определяем оптимальное количество итераций
-    if 'LightGBM' in active_models and MODEL_CONFIGS['LightGBM']['seeds']:
+    if optimize_lgbm_iters and 'LightGBM' in active_models and MODEL_CONFIGS['LightGBM']['seeds']:
         lgb_wrapper = active_models['LightGBM']
         if lgb_wrapper.models:
-            n_iter_ho = int(np.median([getattr(m, 'best_iteration_', 1500) for m in lgb_wrapper.models]) 
-                          * LGB_ITER_MULTIPLIER)
+            n_iter_ho = np.median([getattr(m, 'best_iteration_', 1500) for m in lgb_wrapper.models]) 
+            n_iter_ho = int(n_iter_ho * LGB_ITER_MULTIPLIER)
             MODEL_CONFIGS['LightGBM']['params']['n_estimators'] = n_iter_ho
             # Пересоздаем обертку с новыми параметрами
             active_models['LightGBM'] = LightGBMWrapper('LightGBM', MODEL_CONFIGS['LightGBM'])
@@ -508,8 +509,8 @@ def main():
                 "wind_direction_10m", "wind_direction_100m",
                 "temperature_2m", "pressure_msl",
                 #
-                "relative_humidity_2m",   
-                "dew_point_2m", # точка росы
+                # "relative_humidity_2m",   
+                # "dew_point_2m", # точка росы
             ],
             "timezone": "UTC"
         }
@@ -523,8 +524,8 @@ def main():
             "temp2m_era5": r["temperature_2m"],
             "pressure_era5": r["pressure_msl"],
             #
-            "rh2m_era5": r["relative_humidity_2m"],
-            "dewpoint2m_era5": r["dew_point_2m"],
+            # "rh2m_era5": r["relative_humidity_2m"],
+            # "dewpoint2m_era5": r["dew_point_2m"],
         })
 
     print("Загрузка ERA5...")
@@ -1002,6 +1003,8 @@ def main():
     # best_cat_params = {'iterations': 1362, 'learning_rate': 0.013597596978785926, 'depth': 7, 'l2_leaf_reg': 0.02114815090518835, 'border_count': 101, 'bootstrap_type': 'Bernoulli', 'subsample': 0.9035862570363855, 'verbose': False}
     best_xgb_params = {'n_estimators': 1071, 'learning_rate': 0.026569216347370212, 'max_depth': 5, 'min_child_weight': 10, 'subsample': 0.8097813488756438, 'colsample_bytree': 0.6463475564516007, 'colsample_bylevel': 0.8496268024138052, 'reg_alpha': 0.0251343211987505, 'reg_lambda': 0.03247801858119664, 'gamma': 0.009378112717555705, 'objective': 'reg:quantileerror', 'quantile_alpha': 0.5, 'verbosity': 0}
 
+    best_lgb_params = {'n_estimators': 1309, 'learning_rate': 0.011548797797512488, 'num_leaves': 42, 'max_depth': 11, 'min_child_samples': 37, 'subsample': 0.6805130457867344, 'colsample_bytree': 0.7114480131980546, 'reg_alpha': 0.008808333526206925, 'reg_lambda': 0.010302057297292477, 'objective': 'quantile', 'alpha': 0.5, 'n_jobs': -1, 'verbose': -1}
+
     # РАСКОММЕНТИРОВАТЬ ДЛЯ ОПТИМИЗАЦИИ:
     # best_lgb_params = optimize_lightgbm(X, y)
     # best_cat_params = optimize_catboost(X, y)
@@ -1034,7 +1037,7 @@ def main():
     best_weights, model_wrappers = train_and_optimize_weights(X_tr, y_tr, X_ho, y_ho, model_wrappers)
     
     # Финальное обучение только моделей с весом > 0
-    final_pred = final_train_and_predict(X, y, X_valid, model_wrappers, best_weights)
+    final_pred = final_train_and_predict(X, y, X_valid, model_wrappers, best_weights, optimize_lgbm_iters=False)
     
     # Постобработка прогноза (оригинальная логика)
     zero_mask = valid_f['turbines_available'].values <= 0
